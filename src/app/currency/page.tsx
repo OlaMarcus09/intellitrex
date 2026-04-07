@@ -2,10 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { SUPPORTED_COINS, MODELS } from "@/lib/constants";
-import { TrendingUp, TrendingDown, Activity, Lock, Crown } from "lucide-react";
+import { TrendingUp, TrendingDown, Activity } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
-import Link from "next/link";
 
 type Candle = {
   time: number;
@@ -150,7 +149,7 @@ export default function CurrencyPage() {
     setLoading(true);
     try {
       const res = await fetch(
-        `/api/prices?pair=${selectedCoin.krakenPair}&interval=${timeRange.interval}`
+        `/api/prices?pair=${selectedCoin.krakenPair}&interval=${timeRange.interval}&limit=${timeRange.limit}`
       );
       const data = await res.json();
       if (data.candles) {
