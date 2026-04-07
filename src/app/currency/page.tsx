@@ -211,33 +211,55 @@ export default function CurrencyPage() {
   const rsi = showRSI ? computeRSI(candles) : [];
   const bollinger = showBollinger ? computeBollinger(candles) : null;
 
-  // Chart dimensions
-  const chartW = 600;
-  const chartH = 300;
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
+
+  // Chart dimensions with padding for axes
+  const padL = 70; // left padding for Y-axis labels
+  const padB = 30; // bottom padding for X-axis labels
+  const padR = 10;
+  const padT = 10;
+  const svgW = 700;
+  const svgH = 340;
+  const chartW = svgW - padL - padR;
+  const chartH = svgH - padB - padT;
+
   const minPrice = candles.length ? Math.min(...candles.map((c) => c.low)) * 0.995 : 0;
   const maxPrice = candles.length ? Math.max(...candles.map((c) => c.high)) * 1.005 : 1;
   const priceRange = maxPrice - minPrice || 1;
 
-  const toX = (i: number, total: number) => (i / Math.max(total - 1, 1)) * chartW;
+  const toX = (i: number, total: number) => padL + (i / Math.max(total - 1, 1)) * chartW;
   const toY = (price: number) =>
-    chartH - ((price - minPrice) / priceRange) * chartH;
+    padT + chartH - ((price - minPrice) / priceRange) * chartH;
+
+  // Y-axis tick values (5 ticks)
+  const yTicks = Array.from({ length: 5 }, (_, i) => minPrice + (priceRange * i) / 4);
+
+  // X-axis date labels (max 6)
+  const xLabelCount = Math.min(candles.length, 6);
+  const xLabels = candles.length > 1
+    ? Array.from({ length: xLabelCount }, (_, i) => {
+        const idx = Math.floor((i / (xLabelCount - 1)) * (candles.length - 1));
+        const c = candles[idx];
+        const d = new Date(c.time * 1000);
+        return {
+          x: toX(idx, candles.length),
+          label: timeRange.interval === "60"
+            ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : d.toLocaleDateString([], { month: "short", day: "numeric" }),
+        };
+      })
+    : [];
 
   const priceLine =
     candles.length > 1
-      ? candles
-          .map((c, i) => `${toX(i, candles.length)},${toY(c.close)}`)
-          .join(" ")
+      ? candles.map((c, i) => `${toX(i, candles.length)},${toY(c.close)}`).join(" ")
       : "";
 
   const smaLine =
     sma20.length > 0
-      ? sma20
-          .map((v, i) => (v !== null ? `${toX(i, candles.length)},${toY(v)}` : ""))
-          .filter(Boolean)
-          .join(" ")
+      ? sma20.map((v, i) => (v !== null ? `${toX(i, candles.length)},${toY(v)}` : "")).filter(Boolean).join(" ")
       : "";
 
-  // Forecast line (appended after price data)
   const forecastLine = forecasts
     .map((f, i) => {
       const price = parseFloat(f.Close || f.Predicted_Close || f.Forecast || "0");
@@ -248,6 +270,19 @@ export default function CurrencyPage() {
     .join(" ");
 
   const lastRSI = rsi.length > 0 ? rsi[rsi.length - 1] : null;
+
+  const hoverCandle = hoverIdx !== null ? candles[hoverIdx] : null;
+
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (candles.length < 2) return;
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const mouseX = ((e.clientX - rect.left) / rect.width) * svgW;
+    const dataX = mouseX - padL;
+    if (dataX < 0 || dataX > chartW) { setHoverIdx(null); return; }
+    const idx = Math.round((dataX / chartW) * (candles.length - 1));
+    setHoverIdx(Math.max(0, Math.min(idx, candles.length - 1)));
+  };
 
   return (
     <div className="min-h-screen py-8 px-6">
@@ -321,90 +356,165 @@ export default function CurrencyPage() {
               )}
 
               {/* SVG Chart */}
-              <div className="relative w-full aspect-[2/1] bg-muted/30 rounded-xl overflow-hidden">
+              <div className="relative w-full bg-muted/30 rounded-xl overflow-hidden" style={{ aspectRatio: `${svgW}/${svgH}` }}>
                 {loading ? (
                   <div className="absolute inset-0 flex items-center justify-center">
                     <Activity className="w-8 h-8 text-muted-foreground animate-pulse" />
                   </div>
                 ) : (
                   <svg
-                    viewBox={`0 0 ${chartW} ${chartH}`}
+                    viewBox={`0 0 ${svgW} ${svgH}`}
                     className="w-full h-full"
-                    preserveAspectRatio="none"
+                    preserveAspectRatio="xMidYMid meet"
+                    onMouseMove={handleMouseMove}
+                    onMouseLeave={() => setHoverIdx(null)}
                   >
-                    {/* Grid lines */}
-                    {[0.25, 0.5, 0.75].map((frac) => (
-                      <line
-                        key={frac}
-                        x1={0}
-                        y1={chartH * frac}
-                        x2={chartW}
-                        y2={chartH * frac}
-                        stroke="currentColor"
-                        strokeOpacity={0.06}
-                      />
+                    {/* Y-axis labels + grid lines */}
+                    {yTicks.map((price, i) => (
+                      <g key={`y-${i}`}>
+                        <line
+                          x1={padL}
+                          y1={toY(price)}
+                          x2={svgW - padR}
+                          y2={toY(price)}
+                          stroke="currentColor"
+                          strokeOpacity={0.08}
+                        />
+                        <text
+                          x={padL - 6}
+                          y={toY(price) + 3}
+                          textAnchor="end"
+                          fill="currentColor"
+                          fillOpacity={0.4}
+                          fontSize="9"
+                          fontFamily="system-ui"
+                        >
+                          {price >= 1000
+                            ? `$${(price / 1000).toFixed(1)}K`
+                            : price >= 1
+                            ? `$${price.toFixed(1)}`
+                            : `$${price.toFixed(4)}`}
+                        </text>
+                      </g>
                     ))}
 
-                    {/* Bollinger bands */}
-                    {bollinger && (
-                      <>
-                        <polyline
-                          points={bollinger.upper
-                            .map((v, i) =>
-                              v !== null ? `${toX(i, candles.length)},${toY(v)}` : ""
-                            )
-                            .filter(Boolean)
-                            .join(" ")}
-                          fill="none"
-                          stroke="#a78bfa"
-                          strokeWidth="1"
-                          strokeOpacity="0.5"
-                        />
-                        <polyline
-                          points={bollinger.lower
-                            .map((v, i) =>
-                              v !== null ? `${toX(i, candles.length)},${toY(v)}` : ""
-                            )
-                            .filter(Boolean)
-                            .join(" ")}
-                          fill="none"
-                          stroke="#a78bfa"
-                          strokeWidth="1"
-                          strokeOpacity="0.5"
-                        />
-                      </>
-                    )}
+                    {/* X-axis date labels */}
+                    {xLabels.map((lbl, i) => (
+                      <text
+                        key={`x-${i}`}
+                        x={lbl.x}
+                        y={svgH - 6}
+                        textAnchor="middle"
+                        fill="currentColor"
+                        fillOpacity={0.4}
+                        fontSize="9"
+                        fontFamily="system-ui"
+                      >
+                        {lbl.label}
+                      </text>
+                    ))}
+
+                    {/* Bollinger band fill */}
+                    {bollinger && (() => {
+                      const upperPts = bollinger.upper
+                        .map((v, i) => (v !== null ? `${toX(i, candles.length)},${toY(v)}` : null))
+                        .filter(Boolean);
+                      const lowerPts = bollinger.lower
+                        .map((v, i) => (v !== null ? `${toX(i, candles.length)},${toY(v)}` : null))
+                        .filter(Boolean);
+                      const fillPoly = [...upperPts, ...lowerPts.reverse()].join(" ");
+                      return (
+                        <>
+                          <polygon points={fillPoly} fill="#a78bfa" fillOpacity="0.06" />
+                          <polyline points={upperPts.join(" ")} fill="none" stroke="#22c55e" strokeWidth="1.2" strokeOpacity="0.7" />
+                          <polyline points={lowerPts.reverse().join(" ")} fill="none" stroke="#ef4444" strokeWidth="1.2" strokeOpacity="0.7" />
+                        </>
+                      );
+                    })()}
 
                     {/* Price line */}
                     {priceLine && (
-                      <polyline
-                        points={priceLine}
-                        fill="none"
-                        stroke="#22c55e"
-                        strokeWidth="2"
-                      />
+                      <>
+                        <defs>
+                          <linearGradient id="priceGrad" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#22c55e" stopOpacity="0.15" />
+                            <stop offset="100%" stopColor="#22c55e" stopOpacity="0" />
+                          </linearGradient>
+                        </defs>
+                        <polygon
+                          points={`${priceLine} ${toX(candles.length - 1, candles.length)},${padT + chartH} ${toX(0, candles.length)},${padT + chartH}`}
+                          fill="url(#priceGrad)"
+                        />
+                        <polyline points={priceLine} fill="none" stroke="#22c55e" strokeWidth="2" />
+                      </>
                     )}
 
                     {/* SMA 20 */}
                     {smaLine && (
-                      <polyline
-                        points={smaLine}
-                        fill="none"
-                        stroke="#f59e0b"
-                        strokeWidth="1.5"
-                        strokeDasharray="4 2"
-                      />
+                      <polyline points={smaLine} fill="none" stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="4 2" />
                     )}
 
                     {/* Forecast overlay */}
                     {forecastLine && (
-                      <polyline
-                        points={forecastLine}
-                        fill="none"
-                        stroke="#5b7cfa"
-                        strokeWidth="2"
-                        strokeDasharray="6 3"
-                      />
+                      <polyline points={forecastLine} fill="none" stroke="#5b7cfa" strokeWidth="2" strokeDasharray="6 3" />
+                    )}
+
+                    {/* Hover crosshair + tooltip */}
+                    {hoverCandle && hoverIdx !== null && (
+                      <>
+                        <line
+                          x1={toX(hoverIdx, candles.length)}
+                          y1={padT}
+                          x2={toX(hoverIdx, candles.length)}
+                          y2={padT + chartH}
+                          stroke="currentColor"
+                          strokeOpacity={0.2}
+                          strokeDasharray="3 3"
+                        />
+                        <circle
+                          cx={toX(hoverIdx, candles.length)}
+                          cy={toY(hoverCandle.close)}
+                          r="4"
+                          fill="#22c55e"
+                          stroke="white"
+                          strokeWidth="1.5"
+                        />
+                        <rect
+                          x={Math.min(toX(hoverIdx, candles.length) - 55, svgW - padR - 115)}
+                          y={Math.max(toY(hoverCandle.close) - 42, padT)}
+                          width="110"
+                          height="36"
+                          rx="6"
+                          fill="var(--card, #1a1d2e)"
+                          stroke="var(--border, #2a2f45)"
+                          strokeWidth="1"
+                        />
+                        <text
+                          x={Math.min(toX(hoverIdx, candles.length), svgW - padR - 60)}
+                          y={Math.max(toY(hoverCandle.close) - 26, padT + 14)}
+                          textAnchor="middle"
+                          fill="var(--foreground, #e2e8f0)"
+                          fontSize="10"
+                          fontWeight="600"
+                          fontFamily="system-ui"
+                        >
+                          {formatPrice(hoverCandle.close)}
+                        </text>
+                        <text
+                          x={Math.min(toX(hoverIdx, candles.length), svgW - padR - 60)}
+                          y={Math.max(toY(hoverCandle.close) - 12, padT + 28)}
+                          textAnchor="middle"
+                          fill="var(--muted-foreground, #94a3b8)"
+                          fontSize="8"
+                          fontFamily="system-ui"
+                        >
+                          {new Date(hoverCandle.time * 1000).toLocaleDateString([], {
+                            month: "short",
+                            day: "numeric",
+                            year: "numeric",
+                          })}
+                        </text>
+                      </>
                     )}
                   </svg>
                 )}
