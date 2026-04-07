@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Sun, Moon, User, Crown } from "lucide-react";
+import { Sun, Moon, User, Crown, LogOut, Settings } from "lucide-react";
 import { useTheme } from "./theme-provider";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
+import { useState, useRef, useEffect } from "react";
 
 const NAV_LINKS = [
   { href: "/", label: "Home" },
@@ -16,7 +17,19 @@ const NAV_LINKS = [
 export function Navbar() {
   const pathname = usePathname();
   const { theme, toggle } = useTheme();
-  const { user, isLoggedIn, isPremium } = useAuth();
+  const { user, isLoggedIn, isPremium, isAdmin, signOut } = useAuth();
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
     <nav className="sticky top-0 z-50 bg-card/80 backdrop-blur-md border-b border-border">
@@ -62,20 +75,75 @@ export function Navbar() {
               <Sun className="w-5 h-5 text-muted-foreground" />
             )}
           </button>
-          <Link
-            href="/profile"
-            className="p-2 rounded-full border border-border hover:bg-muted transition-colors relative"
-          >
-            {isLoggedIn && user?.avatar ? (
-              <img
-                src={user.avatar}
-                alt={user.name}
-                className="w-5 h-5 rounded-full"
-              />
-            ) : (
-              <User className="w-5 h-5 text-muted-foreground" />
+
+          {/* Profile button with dropdown */}
+          <div className="relative" ref={dropdownRef}>
+            <button
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="flex items-center gap-1.5 p-1.5 rounded-full border border-border hover:bg-muted transition-colors"
+            >
+              {isLoggedIn && user?.avatar ? (
+                <img src={user.avatar} alt={user.name} className="w-6 h-6 rounded-full" />
+              ) : (
+                <User className="w-5 h-5 text-muted-foreground mx-0.5" />
+              )}
+            </button>
+
+            {dropdownOpen && (
+              <div className="absolute right-0 top-full mt-2 w-56 bg-card border border-border rounded-xl shadow-lg overflow-hidden z-50">
+                {isLoggedIn ? (
+                  <>
+                    <div className="px-4 py-3 border-b border-border">
+                      <p className="text-sm font-medium text-foreground truncate">{user?.name}</p>
+                      <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                    </div>
+                    <Link
+                      href="/profile"
+                      onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                    >
+                      <User className="w-4 h-4" /> Profile
+                    </Link>
+                    {isAdmin && (
+                      <Link
+                        href="/admin"
+                        onClick={() => setDropdownOpen(false)}
+                        className="flex items-center gap-2 px-4 py-2.5 text-sm text-foreground hover:bg-muted transition-colors"
+                      >
+                        <Settings className="w-4 h-4" /> Admin Panel
+                      </Link>
+                    )}
+                    <button
+                      onClick={() => {
+                        signOut();
+                        setDropdownOpen(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-danger hover:bg-danger/10 transition-colors"
+                    >
+                      <LogOut className="w-4 h-4" /> Sign Out
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <Link
+                      href="/profile"
+                      onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2 px-4 py-3 text-sm text-foreground hover:bg-muted transition-colors"
+                    >
+                      <User className="w-4 h-4" /> Sign In
+                    </Link>
+                    <Link
+                      href="/admin"
+                      onClick={() => setDropdownOpen(false)}
+                      className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground hover:bg-muted transition-colors"
+                    >
+                      <Settings className="w-4 h-4" /> Admin
+                    </Link>
+                  </>
+                )}
+              </div>
             )}
-          </Link>
+          </div>
         </div>
       </div>
     </nav>

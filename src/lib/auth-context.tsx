@@ -18,6 +18,18 @@ export type ChatSession = {
   createdAt: number;
 };
 
+export type PortfolioSnapshot = {
+  holdings: { asset: string; quantity: number; supported: boolean }[];
+  insights: {
+    asset: string;
+    quantity: number;
+    forecastedChange?: number;
+    signal: string;
+    insight: string;
+  }[];
+  analyzedAt: number;
+};
+
 export type User = {
   id: string;
   name: string;
@@ -26,125 +38,198 @@ export type User = {
   tier: UserTier;
   chatCount: number;
   chatSessions: ChatSession[];
+  binanceApiKey: string;
   binanceConnected: boolean;
+  portfolioSnapshot: PortfolioSnapshot | null;
+  portfolioUsed: boolean; // free users get one analysis
+  createdAt: number;
 };
 
 const FREE_CHAT_LIMIT = 50;
 const PREMIUM_PRICE = "$99.99/month";
+const USERS_STORAGE_KEY = "intellitrex-users";
+const CURRENT_USER_KEY = "intellitrex-current-user";
+const ADMIN_USERNAME = "admin";
+const ADMIN_PASSWORD = "myintellitrex2026";
 
 type AuthContextType = {
   user: User | null;
   isLoggedIn: boolean;
   isPremium: boolean;
+  isAdmin: boolean;
   chatCount: number;
   chatLimit: number;
   canChat: boolean;
   premiumPrice: string;
   signInWithGoogle: () => void;
+  signInWithEmail: (name: string, email: string) => boolean;
+  signInAdmin: (username: string, password: string) => boolean;
   signOut: () => void;
   incrementChatCount: () => void;
   saveChatSession: (session: ChatSession) => void;
+  loadChatSession: (sessionId: string) => ChatSession | null;
   getChatSessions: () => ChatSession[];
   upgradeToPremium: () => void;
-  setBinanceConnected: (connected: boolean) => void;
+  setBinanceConnected: (connected: boolean, apiKey?: string) => void;
+  unlinkBinance: () => void;
+  savePortfolioSnapshot: (snapshot: PortfolioSnapshot) => void;
+  deleteAccount: () => void;
+  getAllUsers: () => User[];
 };
 
 const AuthContext = createContext<AuthContextType>({
   user: null,
   isLoggedIn: false,
   isPremium: false,
+  isAdmin: false,
   chatCount: 0,
   chatLimit: FREE_CHAT_LIMIT,
   canChat: true,
   premiumPrice: PREMIUM_PRICE,
   signInWithGoogle: () => {},
+  signInWithEmail: () => false,
+  signInAdmin: () => false,
   signOut: () => {},
   incrementChatCount: () => {},
   saveChatSession: () => {},
+  loadChatSession: () => null,
   getChatSessions: () => [],
   upgradeToPremium: () => {},
   setBinanceConnected: () => {},
+  unlinkBinance: () => {},
+  savePortfolioSnapshot: () => {},
+  deleteAccount: () => {},
+  getAllUsers: () => [],
 });
 
 export function useAuth() {
   return useContext(AuthContext);
 }
 
-const STORAGE_KEY = "intellitrex-user";
-
-function loadUser(): User | null {
-  if (typeof window === "undefined") return null;
-  const data = localStorage.getItem(STORAGE_KEY);
-  if (!data) return null;
+function getAllUsersFromStorage(): User[] {
+  if (typeof window === "undefined") return [];
   try {
-    return JSON.parse(data);
+    const data = localStorage.getItem(USERS_STORAGE_KEY);
+    return data ? JSON.parse(data) : [];
   } catch {
-    return null;
+    return [];
   }
 }
 
-function saveUser(user: User | null) {
+function saveAllUsers(users: User[]) {
   if (typeof window === "undefined") return;
-  if (user) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(user));
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
-  }
+  localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
+}
+
+function getCurrentUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem(CURRENT_USER_KEY);
+}
+
+function setCurrentUserId(id: string | null) {
+  if (typeof window === "undefined") return;
+  if (id) localStorage.setItem(CURRENT_USER_KEY, id);
+  else localStorage.removeItem(CURRENT_USER_KEY);
+}
+
+function upsertUser(user: User) {
+  const users = getAllUsersFromStorage();
+  const idx = users.findIndex((u) => u.id === user.id);
+  if (idx >= 0) users[idx] = user;
+  else users.push(user);
+  saveAllUsers(users);
+}
+
+function createUser(name: string, email: string, provider: string): User {
+  return {
+    id: `${provider}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    email,
+    avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=4a6cf7&color=fff`,
+    tier: "free",
+    chatCount: 0,
+    chatSessions: [],
+    binanceApiKey: "",
+    binanceConnected: false,
+    portfolioSnapshot: null,
+    portfolioUsed: false,
+    createdAt: Date.now(),
+  };
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    const saved = loadUser();
-    if (saved) setUser(saved);
+    const adminFlag = sessionStorage.getItem("intellitrex-admin");
+    if (adminFlag === "true") setIsAdmin(true);
+
+    const userId = getCurrentUserId();
+    if (userId) {
+      const users = getAllUsersFromStorage();
+      const found = users.find((u) => u.id === userId);
+      if (found) setUser(found);
+    }
   }, []);
 
-  const updateUser = useCallback((updater: (prev: User) => User) => {
-    setUser((prev) => {
-      if (!prev) return prev;
-      const updated = updater(prev);
-      saveUser(updated);
-      return updated;
-    });
+  const persistUser = useCallback((updated: User) => {
+    setUser(updated);
+    upsertUser(updated);
+    setCurrentUserId(updated.id);
   }, []);
+
+  const updateUser = useCallback(
+    (updater: (prev: User) => User) => {
+      setUser((prev) => {
+        if (!prev) return prev;
+        const updated = updater(prev);
+        upsertUser(updated);
+        return updated;
+      });
+    },
+    []
+  );
 
   const signInWithGoogle = useCallback(() => {
-    // Simulate Google OAuth — in production, integrate with NextAuth.js or Firebase Auth
-    const mockUser: User = {
-      id: "google-" + Math.random().toString(36).slice(2, 10),
-      name: "User",
-      email: "",
-      avatar: "",
-      tier: "free",
-      chatCount: 0,
-      chatSessions: [],
-      binanceConnected: false,
-    };
+    // In production: use NextAuth.js Google provider
+    // For now: open a clean sign-in modal (handled by the profile page)
+  }, []);
 
-    // Open Google OAuth popup (simulated for now)
-    const name = prompt("Enter your name (Google Sign-In simulation):");
-    const email = prompt("Enter your email:");
-    if (!name || !email) return;
+  const signInWithEmail = useCallback(
+    (name: string, email: string): boolean => {
+      if (!name || !email) return false;
 
-    mockUser.name = name;
-    mockUser.email = email;
-    mockUser.avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=4a6cf7&color=fff`;
+      // Check if returning user
+      const users = getAllUsersFromStorage();
+      const existing = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+      if (existing) {
+        setUser(existing);
+        setCurrentUserId(existing.id);
+        return true;
+      }
 
-    // Check if returning user
-    const existing = loadUser();
-    if (existing && existing.email === email) {
-      setUser(existing);
-      return;
+      const newUser = createUser(name, email, "google");
+      persistUser(newUser);
+      return true;
+    },
+    [persistUser]
+  );
+
+  const signInAdmin = useCallback((username: string, password: string): boolean => {
+    if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+      setIsAdmin(true);
+      sessionStorage.setItem("intellitrex-admin", "true");
+      return true;
     }
-
-    saveUser(mockUser);
-    setUser(mockUser);
+    return false;
   }, []);
 
   const signOut = useCallback(() => {
     setUser(null);
-    saveUser(null);
+    setIsAdmin(false);
+    setCurrentUserId(null);
+    sessionStorage.removeItem("intellitrex-admin");
   }, []);
 
   const incrementChatCount = useCallback(() => {
@@ -156,16 +241,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       updateUser((prev) => {
         const sessions = [...prev.chatSessions];
         const idx = sessions.findIndex((s) => s.id === session.id);
-        if (idx >= 0) {
-          sessions[idx] = session;
-        } else {
-          sessions.unshift(session);
-        }
-        // Keep last 50 sessions
-        return { ...prev, chatSessions: sessions.slice(0, 50) };
+        if (idx >= 0) sessions[idx] = session;
+        else sessions.unshift(session);
+        return { ...prev, chatSessions: sessions.slice(0, 100) };
       });
     },
     [updateUser]
+  );
+
+  const loadChatSession = useCallback(
+    (sessionId: string): ChatSession | null => {
+      return user?.chatSessions.find((s) => s.id === sessionId) || null;
+    },
+    [user]
   );
 
   const getChatSessions = useCallback(() => {
@@ -173,16 +261,51 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user]);
 
   const upgradeToPremium = useCallback(() => {
-    // In production, integrate with Stripe Checkout
     updateUser((prev) => ({ ...prev, tier: "premium" }));
   }, [updateUser]);
 
   const setBinanceConnected = useCallback(
-    (connected: boolean) => {
-      updateUser((prev) => ({ ...prev, binanceConnected: connected }));
+    (connected: boolean, apiKey?: string) => {
+      updateUser((prev) => ({
+        ...prev,
+        binanceConnected: connected,
+        binanceApiKey: apiKey || prev.binanceApiKey,
+      }));
     },
     [updateUser]
   );
+
+  const unlinkBinance = useCallback(() => {
+    updateUser((prev) => ({
+      ...prev,
+      binanceConnected: false,
+      binanceApiKey: "",
+      portfolioSnapshot: null,
+    }));
+  }, [updateUser]);
+
+  const savePortfolioSnapshot = useCallback(
+    (snapshot: PortfolioSnapshot) => {
+      updateUser((prev) => ({
+        ...prev,
+        portfolioSnapshot: snapshot,
+        portfolioUsed: true,
+      }));
+    },
+    [updateUser]
+  );
+
+  const deleteAccount = useCallback(() => {
+    if (!user) return;
+    const users = getAllUsersFromStorage().filter((u) => u.id !== user.id);
+    saveAllUsers(users);
+    setUser(null);
+    setCurrentUserId(null);
+  }, [user]);
+
+  const getAllUsers = useCallback(() => {
+    return getAllUsersFromStorage();
+  }, []);
 
   const isPremium = user?.tier === "premium";
   const canChat = isPremium || (user?.chatCount ?? 0) < FREE_CHAT_LIMIT;
@@ -193,17 +316,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         isLoggedIn: !!user,
         isPremium,
+        isAdmin,
         chatCount: user?.chatCount ?? 0,
         chatLimit: FREE_CHAT_LIMIT,
         canChat,
         premiumPrice: PREMIUM_PRICE,
         signInWithGoogle,
+        signInWithEmail,
+        signInAdmin,
         signOut,
         incrementChatCount,
         saveChatSession,
+        loadChatSession,
         getChatSessions,
         upgradeToPremium,
         setBinanceConnected,
+        unlinkBinance,
+        savePortfolioSnapshot,
+        deleteAccount,
+        getAllUsers,
       }}
     >
       {children}

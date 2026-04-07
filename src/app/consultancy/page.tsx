@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { Send, Mic, RefreshCw, Sparkles, Star, AlertTriangle, History, MessageSquare, Lock, Crown } from "lucide-react";
 import { CHATBOT_MODES } from "@/lib/constants";
 import { useAuth, type ChatSession } from "@/lib/auth-context";
@@ -30,22 +31,55 @@ const LIMITATIONS = [
   "Limited knowledge of world and events after 2021",
 ];
 
+const PORTFOLIO_KEYWORDS = [
+  "portfolio", "my holdings", "my coins", "my investment",
+  "risk analysis", "my binance", "my account", "should i sell",
+  "should i buy", "my position",
+];
+
 export default function ConsultancyPage() {
-  const { isLoggedIn, isPremium, canChat, chatCount, chatLimit, incrementChatCount, saveChatSession } = useAuth();
+  return (
+    <Suspense>
+      <ConsultancyContent />
+    </Suspense>
+  );
+}
+
+function ConsultancyContent() {
+  const {
+    isLoggedIn, isPremium, canChat, chatCount, chatLimit,
+    incrementChatCount, saveChatSession, loadChatSession, user,
+  } = useAuth();
+
+  const searchParams = useSearchParams();
+  const resumeSessionId = searchParams.get("session");
 
   const [mode, setMode] = useState<string>(CHATBOT_MODES[1].id);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
-  const [sessionId] = useState(() => "session-" + Date.now());
+  const [sessionId, setSessionId] = useState(() => "session-" + Date.now());
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [initialized, setInitialized] = useState(false);
+
+  // Load resumed session
+  useEffect(() => {
+    if (resumeSessionId && !initialized) {
+      const session = loadChatSession(resumeSessionId);
+      if (session) {
+        setSessionId(session.id);
+        setMode(session.mode);
+        setMessages(session.messages.map((m) => ({ role: m.role, content: m.content })));
+      }
+      setInitialized(true);
+    }
+  }, [resumeSessionId, loadChatSession, initialized]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Save session whenever messages change
   const saveCurrentSession = useCallback(
     (msgs: Message[]) => {
       if (!isLoggedIn || msgs.length === 0) return;
@@ -61,32 +95,43 @@ export default function ConsultancyPage() {
     [isLoggedIn, sessionId, mode, saveChatSession]
   );
 
+  const isPortfolioQuestion = (text: string): boolean => {
+    const lower = text.toLowerCase();
+    return PORTFOLIO_KEYWORDS.some((kw) => lower.includes(kw));
+  };
+
   const sendMessage = async (text?: string) => {
     const msg = text || input.trim();
     if (!msg || loading) return;
 
-    // Check login for non-free features
     if (!isLoggedIn) {
       setMessages((prev) => [
         ...prev,
         { role: "user", content: msg },
-        {
-          role: "assistant",
-          content: "Please sign in to use the AI advisor. You can sign in from the Profile page.",
-        },
+        { role: "assistant", content: "Please sign in to use the AI advisor. Go to your Profile page to get started." },
       ]);
       setInput("");
       return;
     }
 
-    // Check chat limit
     if (!canChat) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", content: msg },
+        { role: "assistant", content: `You've reached your free limit of ${chatLimit} responses. Upgrade to Premium ($99.99/month) for unlimited AI conversations.` },
+      ]);
+      setInput("");
+      return;
+    }
+
+    // Check for portfolio-related questions
+    if (!isPremium && isPortfolioQuestion(msg)) {
       setMessages((prev) => [
         ...prev,
         { role: "user", content: msg },
         {
           role: "assistant",
-          content: `You've reached your free limit of ${chatLimit} responses. Upgrade to Premium ($99.99/month) for unlimited AI conversations. Visit your Profile page to subscribe.`,
+          content: "Portfolio and risk analysis queries are a Premium feature. Upgrade to Premium ($99.99/month) to get personalized insights about your holdings, risk assessments, and tailored buy/sell analysis. Visit your Profile page to subscribe.",
         },
       ]);
       setInput("");
@@ -103,11 +148,7 @@ export default function ConsultancyPage() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: msg,
-          mode,
-          history: messages.slice(-10),
-        }),
+        body: JSON.stringify({ message: msg, mode, history: messages.slice(-10) }),
       });
       const data = await res.json();
       const assistantMsg: Message = {
@@ -119,18 +160,22 @@ export default function ConsultancyPage() {
       incrementChatCount();
       saveCurrentSession(updatedMessages);
     } catch {
-      const errorMsg: Message = {
-        role: "assistant",
-        content: "Sorry, the AI advisor is temporarily unavailable. Please try again.",
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Sorry, the AI advisor is temporarily unavailable." },
+      ]);
     }
     setLoading(false);
   };
 
   const newDialog = () => {
     setMessages([]);
+    setSessionId("session-" + Date.now());
+    // Clear the URL param
+    window.history.replaceState(null, "", "/consultancy");
   };
+
+  const chatSessions = user?.chatSessions || [];
 
   return (
     <div className="min-h-screen py-8 px-6">
@@ -138,7 +183,7 @@ export default function ConsultancyPage() {
         <h1 className="text-3xl font-bold text-foreground mb-8">Consultancy</h1>
 
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Left: Mode selector + History */}
+          {/* Left sidebar */}
           <div className="space-y-4">
             {CHATBOT_MODES.map((m) => (
               <button
@@ -146,31 +191,20 @@ export default function ConsultancyPage() {
                 onClick={() => setMode(m.id)}
                 className={cn(
                   "w-full text-left rounded-xl p-5 border transition-colors",
-                  mode === m.id
-                    ? "border-primary bg-card"
-                    : "border-border bg-card/50 hover:bg-card"
+                  mode === m.id ? "border-primary bg-card" : "border-border bg-card/50 hover:bg-card"
                 )}
               >
                 <div className="flex items-center gap-2 mb-2">
-                  <div
-                    className={cn(
-                      "w-5 h-5 rounded-full border-2 flex items-center justify-center",
-                      mode === m.id ? "border-primary" : "border-muted-foreground"
-                    )}
-                  >
-                    {mode === m.id && (
-                      <div className="w-2.5 h-2.5 rounded-full bg-primary" />
-                    )}
+                  <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center", mode === m.id ? "border-primary" : "border-muted-foreground")}>
+                    {mode === m.id && <div className="w-2.5 h-2.5 rounded-full bg-primary" />}
                   </div>
                   <h3 className="font-semibold text-foreground text-sm">{m.name}</h3>
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed pl-7">
-                  {m.description}
-                </p>
+                <p className="text-xs text-muted-foreground leading-relaxed pl-7">{m.description}</p>
               </button>
             ))}
 
-            {/* Chat usage for free users */}
+            {/* Chat usage */}
             {isLoggedIn && !isPremium && (
               <div className="bg-card rounded-xl border border-border p-4">
                 <div className="flex justify-between text-xs mb-2">
@@ -178,98 +212,66 @@ export default function ConsultancyPage() {
                   <span className="text-foreground font-medium">{chatCount}/{chatLimit}</span>
                 </div>
                 <div className="w-full h-1.5 bg-border rounded-full overflow-hidden">
-                  <div
-                    className={cn(
-                      "h-full rounded-full transition-all",
-                      chatCount >= chatLimit ? "bg-danger" : "bg-primary"
-                    )}
-                    style={{ width: `${Math.min((chatCount / chatLimit) * 100, 100)}%` }}
-                  />
+                  <div className={cn("h-full rounded-full transition-all", chatCount >= chatLimit ? "bg-danger" : "bg-primary")}
+                    style={{ width: `${Math.min((chatCount / chatLimit) * 100, 100)}%` }} />
                 </div>
-                {chatCount >= chatLimit * 0.8 && chatCount < chatLimit && (
-                  <p className="text-xs text-yellow-600 mt-2">
-                    Running low! {chatLimit - chatCount} responses left.
-                  </p>
-                )}
                 {chatCount >= chatLimit && (
-                  <Link
-                    href="/profile"
-                    className="flex items-center gap-1 text-xs text-primary mt-2 hover:underline"
-                  >
+                  <Link href="/profile" className="flex items-center gap-1 text-xs text-primary mt-2 hover:underline">
                     <Crown className="w-3 h-3" /> Upgrade to Premium
                   </Link>
                 )}
               </div>
             )}
 
-            {/* Not logged in notice */}
             {!isLoggedIn && (
               <div className="bg-card rounded-xl border border-border p-4 text-center">
                 <Lock className="w-5 h-5 text-muted-foreground mx-auto mb-2" />
-                <p className="text-xs text-muted-foreground mb-2">
-                  Sign in for 50 free AI responses
-                </p>
-                <Link
-                  href="/profile"
-                  className="text-xs text-primary hover:underline font-medium"
-                >
-                  Sign In
-                </Link>
+                <p className="text-xs text-muted-foreground mb-2">Sign in for 50 free AI responses</p>
+                <Link href="/profile" className="text-xs text-primary hover:underline font-medium">Sign In</Link>
               </div>
             )}
 
-            {/* History toggle */}
-            {messages.length > 0 && (
+            {/* Session history */}
+            {chatSessions.length > 0 && (
               <div className="bg-card rounded-xl border border-border p-4">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setShowHistory(true)}
-                    className={cn(
-                      "flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
-                      showHistory
-                        ? "bg-foreground text-background"
-                        : "bg-muted text-muted-foreground"
-                    )}
-                  >
+                <div className="flex gap-2 mb-3">
+                  <button onClick={() => setShowHistory(true)}
+                    className={cn("flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
+                      showHistory ? "bg-foreground text-background" : "bg-muted text-muted-foreground")}>
                     <History className="w-3.5 h-3.5" /> History
                   </button>
-                  <button
-                    onClick={() => setShowHistory(false)}
-                    className={cn(
-                      "flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
-                      !showHistory
-                        ? "bg-foreground text-background"
-                        : "bg-muted text-muted-foreground"
-                    )}
-                  >
+                  <button onClick={() => setShowHistory(false)}
+                    className={cn("flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors",
+                      !showHistory ? "bg-foreground text-background" : "bg-muted text-muted-foreground")}>
                     <MessageSquare className="w-3.5 h-3.5" /> Main
                   </button>
                 </div>
                 {showHistory && (
-                  <div className="mt-3 space-y-2 max-h-60 overflow-y-auto">
-                    {messages
-                      .filter((m) => m.role === "user")
-                      .map((m, i) => (
-                        <div
-                          key={i}
-                          className="text-xs text-muted-foreground py-1.5 border-b border-border/50 last:border-0 truncate"
-                        >
-                          {m.content.slice(0, 50)}...
-                        </div>
-                      ))}
+                  <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                    {chatSessions.map((s) => (
+                      <a
+                        key={s.id}
+                        href={`/consultancy?session=${s.id}`}
+                        className={cn(
+                          "block text-xs py-2 px-2 rounded-lg truncate transition-colors",
+                          s.id === sessionId ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted"
+                        )}
+                      >
+                        {s.title || "Untitled"}
+                      </a>
+                    ))}
                   </div>
                 )}
               </div>
             )}
           </div>
 
-          {/* Right: Chat area */}
+          {/* Chat area */}
           <div className="lg:col-span-2 bg-card rounded-2xl border border-border flex flex-col min-h-[600px]">
             {messages.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center p-8">
                 <h2 className="text-2xl font-bold text-foreground mb-1">Intellitrex Bot</h2>
                 <p className="text-xs text-muted-foreground mb-8">Ver 2.0 Apr 2026</p>
-
                 <div className="grid grid-cols-3 gap-4 w-full max-w-2xl mb-6">
                   {[
                     { icon: Sparkles, title: "Examples", items: EXAMPLES },
@@ -285,18 +287,10 @@ export default function ConsultancyPage() {
                         </div>
                         <div className="space-y-2">
                           {section.items.map((item, i) => (
-                            <button
-                              key={i}
-                              onClick={() => section.title === "Examples" && sendMessage(item)}
-                              className={cn(
-                                "w-full text-left text-xs p-3 rounded-lg border border-border",
-                                section.title === "Examples"
-                                  ? "hover:bg-muted cursor-pointer text-primary"
-                                  : "text-muted-foreground cursor-default"
-                              )}
-                            >
-                              {item}
-                              {section.title === "Examples" && " \u2192"}
+                            <button key={i} onClick={() => section.title === "Examples" && sendMessage(item)}
+                              className={cn("w-full text-left text-xs p-3 rounded-lg border border-border",
+                                section.title === "Examples" ? "hover:bg-muted cursor-pointer text-primary" : "text-muted-foreground cursor-default")}>
+                              {item}{section.title === "Examples" && " \u2192"}
                             </button>
                           ))}
                         </div>
@@ -308,15 +302,8 @@ export default function ConsultancyPage() {
             ) : (
               <div className="flex-1 overflow-y-auto p-6 space-y-4">
                 {messages.map((msg, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed",
-                      msg.role === "user"
-                        ? "ml-auto bg-primary text-primary-foreground"
-                        : "bg-muted text-foreground"
-                    )}
-                  >
+                  <div key={i} className={cn("max-w-[80%] rounded-2xl p-4 text-sm leading-relaxed",
+                    msg.role === "user" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted text-foreground")}>
                     {msg.content}
                   </div>
                 ))}
@@ -336,10 +323,7 @@ export default function ConsultancyPage() {
             {/* Input */}
             <div className="p-4 border-t border-border">
               <div className="flex items-center gap-2 mb-2 justify-end">
-                <button
-                  onClick={newDialog}
-                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
+                <button onClick={newDialog} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
                   <RefreshCw className="w-3.5 h-3.5" /> New dialog
                 </button>
               </div>
@@ -350,24 +334,13 @@ export default function ConsultancyPage() {
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-                    placeholder={
-                      !isLoggedIn
-                        ? "Sign in to start chatting..."
-                        : !canChat
-                        ? "Chat limit reached. Upgrade to Premium."
-                        : "Send a message"
-                    }
+                    placeholder={!isLoggedIn ? "Sign in to start chatting..." : !canChat ? "Chat limit reached. Upgrade to Premium." : "Send a message"}
                     disabled={!isLoggedIn || !canChat}
                     className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none disabled:opacity-50"
                   />
-                  <button className="text-muted-foreground hover:text-foreground ml-2">
-                    <Mic className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => sendMessage()}
-                    disabled={!input.trim() || loading || !isLoggedIn || !canChat}
-                    className="text-primary hover:text-primary/80 ml-2 disabled:opacity-50"
-                  >
+                  <button className="text-muted-foreground hover:text-foreground ml-2"><Mic className="w-4 h-4" /></button>
+                  <button onClick={() => sendMessage()} disabled={!input.trim() || loading || !isLoggedIn || !canChat}
+                    className="text-primary hover:text-primary/80 ml-2 disabled:opacity-50">
                     <Send className="w-4 h-4" />
                   </button>
                 </div>

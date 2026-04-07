@@ -2,8 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { SUPPORTED_COINS, MODELS } from "@/lib/constants";
-import { TrendingUp, TrendingDown, Activity } from "lucide-react";
+import { TrendingUp, TrendingDown, Activity, Lock, Crown } from "lucide-react";
+import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 
 type Candle = {
   time: number;
@@ -131,13 +133,14 @@ function FearGreedGauge({ value, label }: { value: number; label: string }) {
 }
 
 export default function CurrencyPage() {
+  const { isPremium } = useAuth();
   const [selectedCoin, setSelectedCoin] = useState(SUPPORTED_COINS[0] as typeof SUPPORTED_COINS[number]);
   const [timeRange, setTimeRange] = useState(TIME_RANGES[1]);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [fearGreed, setFearGreed] = useState<FearGreed | null>(null);
   const [forecasts, setForecasts] = useState<ForecastRow[]>([]);
   const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [selectedModel, setSelectedModel] = useState("ensemble");
+  const [selectedModel, setSelectedModel] = useState("xgboost");
   const [showSMA, setShowSMA] = useState(false);
   const [showRSI, setShowRSI] = useState(false);
   const [showBollinger, setShowBollinger] = useState(false);
@@ -437,14 +440,22 @@ export default function CurrencyPage() {
 
                 <select
                   value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "ensemble" && !isPremium) return;
+                    setSelectedModel(val);
+                  }}
                   className="ml-auto px-3 py-1.5 rounded-lg border border-border bg-card text-foreground text-xs"
                 >
-                  {MODELS.map((m) => (
-                    <option key={m} value={m.toLowerCase()}>
-                      Forecast: {m}
-                    </option>
-                  ))}
+                  {MODELS.map((m) => {
+                    const val = m.toLowerCase();
+                    const locked = val === "ensemble" && !isPremium;
+                    return (
+                      <option key={m} value={val} disabled={locked}>
+                        {locked ? `\uD83D\uDD12 ${m} (Premium)` : `Forecast: ${m}`}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
