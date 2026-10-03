@@ -29,6 +29,16 @@ type Metrics = Record<
   { MAE?: number; RMSE?: number; R2?: number; [key: string]: number | undefined }
 >;
 
+type IndicatorControl = {
+  label: string;
+  active: boolean;
+  toggle: () => void;
+  color: string;
+  title: string;
+  note?: string;
+  unavailable: string | null;
+};
+
 const TIME_RANGES = [
   { label: "24H", interval: "60", limit: 24 },
   { label: "1W", interval: "1440", limit: 7 },
@@ -580,10 +590,12 @@ export default function CurrencyPage() {
                   <span className="h-0 w-7 border-t-2 border-[#22c55e]" />
                   <span>Price</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="h-0 w-7 border-t-2 border-dashed border-[#5b7cfa]" />
-                  <span>Forecast</span>
-                </div>
+                {forecastLine && (
+                  <div className="flex items-center gap-2">
+                    <span className="h-0 w-7 border-t-2 border-dashed border-[#5b7cfa]" />
+                    <span>Forecast</span>
+                  </div>
+                )}
                 {showSMA && hasUsableSMA && (
                   <div className="flex items-center gap-2">
                     <span className="h-0 w-7 border-t-2 border-dashed border-[#f59e0b]" />
@@ -600,7 +612,7 @@ export default function CurrencyPage() {
 
               {/* Indicator toggles */}
               <div className="flex flex-wrap items-center gap-3 mt-4">
-                {[
+                {([
                   {
                     label: "SMA 20",
                     active: showSMA,
@@ -626,7 +638,7 @@ export default function CurrencyPage() {
                     title: "Toggle Bollinger Bands on the chart",
                     unavailable: showBollinger && !hasUsableBollinger ? "Needs 20 points" : null,
                   },
-                ].map((ind) => (
+                ] satisfies IndicatorControl[]).map((ind) => (
                   <div key={ind.label} className="flex flex-col gap-1">
                     <button
                       onClick={ind.toggle}
